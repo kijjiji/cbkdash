@@ -23,7 +23,14 @@ header{background:var(--paper);border-bottom:2px solid var(--crimson);
 .masthead .sub{color:var(--muted);font-size:.78rem;margin-top:3px}
 .kpis{display:flex;gap:10px;flex-wrap:wrap}
 .kpi{border:1px solid var(--line);border-radius:6px;padding:9px 14px;
-  min-width:138px;background:var(--paper)}
+  min-width:138px;background:var(--paper);position:relative}
+.kpi.dyn{border-left:3px solid var(--steel)}
+.kpi .src{font-size:.58rem;color:var(--faint);margin-top:2px;
+  font-family:var(--mono)}
+.pinbtn{position:absolute;top:3px;right:6px;border:0;background:none;
+  color:var(--faint);cursor:pointer;font-size:.85rem;line-height:1;
+  padding:2px;font-family:inherit}
+.pinbtn:hover{color:var(--crimson)}
 .kpi .lbl{font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;
   color:var(--faint);font-weight:600}
 .kpi .val{font-size:1.28rem;font-weight:700;letter-spacing:-.01em;margin-top:2px}
@@ -259,21 +266,64 @@ function kpiDeltas(t,ci){
   }
   return {v,rows};
 }
-function kpis(){
-  const el=document.getElementById('kpis');
+function loadPins(){
+  try{return JSON.parse(localStorage.getItem('cbk_pins')||'[]');}
+  catch(e){return [];}
+}
+function savePins(){
+  try{localStorage.setItem('cbk_pins',JSON.stringify(PINNED));}catch(e){}
+}
+let PINNED=loadPins().filter(p=>DATA.tables[p.tid]&&
+  DATA.tables[p.tid].columns&&DATA.tables[p.tid].columns[p.ci]!=null);
+const MAXDYN=5;
+window.togglePin=(tid,ci)=>{
+  const i=PINNED.findIndex(p=>p.tid===tid&&p.ci===ci);
+  if(i>=0)PINNED.splice(i,1);else PINNED.push({tid,ci});
+  savePins();renderKpis(CUR);
+};
+function kpiCard(lbl,tid,ci,kind){
+  const t=DATA.tables[tid];if(!t||t.layout==='raw')return '';
+  const d=kpiDeltas(t,ci);if(!d||typeof d.v!=='number')return '';
+  const dlt=d.rows.map(([k,p])=>'<div class="dlt '+
+    (p>0.05?'up':p<-0.05?'dn':'fl')+'">'+
+    (p>0?'\u25b2 ':p<0?'\u25bc ':'')+Math.abs(p).toFixed(1)+'% '+k+'</div>').join('');
+  const btn=kind==='static'?''
+    :kind==='pin'?'<button class="pinbtn" title="Unpin" onclick="togglePin(\''+tid+'\','+ci+')">\u00d7</button>'
+    :'<button class="pinbtn" title="Pin to keep" onclick="togglePin(\''+tid+'\','+ci+')">+</button>';
+  const src=kind==='static'?'':'<div class="src">Table '+tid+'</div>';
+  const short=lbl.length>26?lbl.slice(0,25)+'\u2026':lbl;
+  return '<div class="kpi'+(kind==='static'?'':' dyn')+'">'+btn+
+    '<div class="lbl" title="'+lbl.replace(/"/g,'&quot;')+'">'+short+
+    '</div><div class="val num">'+fmt(d.v)+'</div>'+dlt+src+'</div>';
+}
+function renderKpis(curTid){
+  const el=document.getElementById('kpis');let h='';
+  const used=new Set();
   for(const [lbl,tid,ci] of DATA.kpis){
-    const t=DATA.tables[tid];if(!t)continue;
-    const d=kpiDeltas(t,ci);
-    if(!d||typeof d.v!=='number')continue;
-    const dlt=d.rows.map(([k,p])=>'<div class="dlt '+
-      (p>0.05?'up':p<-0.05?'dn':'fl')+'">'+
-      (p>0?'▲ ':p<0?'▼ ':'')+Math.abs(p).toFixed(1)+'% '+k+'</div>').join('');
-    el.insertAdjacentHTML('beforeend','<div class="kpi"><div class="lbl">'+lbl+
-      '</div><div class="val num">'+fmt(d.v)+'</div>'+dlt+'</div>');
+    h+=kpiCard(lbl,tid,ci,'static');used.add(tid+':'+ci);
   }
+  let n=0;
+  for(const p of PINNED){
+    if(n>=MAXDYN)break;
+    const k=p.tid+':'+p.ci;if(used.has(k))continue;
+    const t=DATA.tables[p.tid];if(!t)continue;
+    const c=kpiCard(t.columns[p.ci],p.tid,p.ci,'pin');
+    if(c){h+=c;used.add(k);n++;}
+  }
+  if(curTid&&DATA.tables[curTid]&&DATA.tables[curTid].layout!=='raw'){
+    const t=DATA.tables[curTid];
+    for(let ci=0;ci<t.columns.length&&n<MAXDYN;ci++){
+      const k=curTid+':'+ci;if(used.has(k))continue;
+      const c=kpiCard(t.columns[ci],curTid,ci,'auto');
+      if(c){h+=c;used.add(k);n++;}
+    }
+  }
+  el.innerHTML=h;
+}
+function setCoverage(){
   document.getElementById('coverage').textContent=
-    'All monthly tables · coverage '+per2lab(DATA.range[0])+' → '+per2lab(DATA.range[1])+
-    ' · '+DATA.snapshots.length+' snapshot(s)';
+    'All monthly tables \u00b7 coverage '+per2lab(DATA.range[0])+' \u2192 '+
+    per2lab(DATA.range[1])+' \u00b7 '+DATA.snapshots.length+' snapshot(s)';
 }
 
 /* ---------- chart ---------- */
@@ -482,6 +532,7 @@ function briefing(main){
 /* ---------- table view ---------- */
 function show(id){
   CUR=id;
+  renderKpis(id&&!id.startsWith('__')?id:null);
   document.querySelectorAll('.navit').forEach(b=>
     b.classList.toggle('on',b.dataset.id===id));
   const main=document.getElementById('main');main.innerHTML='';
@@ -516,5 +567,5 @@ function show(id){
   try{window.scrollTo({top:0});}catch(e){}
 }
 
-buildFbar();buildNav('');kpis();show(BRIEF.cards.length?'__br__':'__ov__');
+buildFbar();buildNav('');setCoverage();show(BRIEF.cards.length?'__br__':'__ov__');
 </script></body></html>
